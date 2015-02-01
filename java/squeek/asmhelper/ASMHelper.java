@@ -192,6 +192,18 @@ public class ASMHelper
 		return null;
 	}
 
+	public static MethodNode findMethodNodeOfClass(ClassNode classNode, String methodName, String methodName2, String methodDesc)
+	{
+		for (MethodNode method : classNode.methods)
+		{
+			if ((method.name.equals(methodName) || method.name.equals(methodName2)) && (methodDesc == null || method.desc.equals(methodDesc)))
+			{
+				return method;
+			}
+		}
+		return null;
+	}
+
 	public static LabelNode findEndLabel(MethodNode method)
 	{
 		for (AbstractInsnNode instruction = method.instructions.getLast(); instruction != null; instruction = instruction.getPrevious())
