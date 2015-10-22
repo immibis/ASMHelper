@@ -1,16 +1,21 @@
 package squeek.asmhelper;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import net.minecraft.launchwrapper.LaunchClassLoader;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LocalVariableNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -39,7 +44,7 @@ public class ASMHelper
 			}
 			catch (IOException e)
 			{
-				e.printStackTrace();
+				ASMHelper.isCauldron = false;
 			}
 		}
 
@@ -51,9 +56,17 @@ public class ASMHelper
 	 */
 	public static ClassNode readClassFromBytes(byte[] bytes)
 	{
+		return readClassFromBytes(bytes, 0);
+	}
+
+	/**
+	 * Overload of {@link #readClassFromBytes(byte[])} with a flags parameter.
+	 */
+	public static ClassNode readClassFromBytes(byte[] bytes, int flags)
+	{
 		ClassNode classNode = new ClassNode();
 		ClassReader classReader = new ClassReader(bytes);
-		classReader.accept(classNode, 0);
+		classReader.accept(classNode, flags);
 		return classNode;
 	}
 
@@ -64,7 +77,15 @@ public class ASMHelper
 	 */
 	public static byte[] writeClassToBytes(ClassNode classNode)
 	{
-		ClassWriter writer = new ObfRemappingClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+		return writeClassToBytes(classNode, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+	}
+
+	/**
+	 * Overload of {@link #writeClassToBytes(ClassNode)} with a flags parameter.
+	 */
+	public static byte[] writeClassToBytes(ClassNode classNode, int flags)
+	{
+		ClassWriter writer = new ObfRemappingClassWriter(flags);
 		classNode.accept(writer);
 		return writer.toByteArray();
 	}
@@ -93,6 +114,76 @@ public class ASMHelper
 	}
 
 	/**
+	 * @return An InputStream instance for the specified class name loaded by the specified ClassLoader.
+	 */
+	public static InputStream getClassAsStreamFromClassLoader(String className, ClassLoader classLoader)
+	{
+		return classLoader.getResourceAsStream(className.replace('.', '/') + ".class");
+	}
+
+	/**
+	 * @return A ClassReader instance for the specified class name.
+	 */
+	public static ClassReader getClassReaderForClassName(String className) throws IOException
+	{
+		return new ClassReader(getClassAsStreamFromClassLoader(className, ASMHelper.class.getClassLoader()));
+	}
+
+	/**
+	 * @return Whether or not the class read by the ClassReader has a valid super class.
+	 */
+	public static boolean classHasSuper(ClassReader classReader)
+	{
+		return classReader.getSuperName() != null && !classReader.getSuperName().equals("java/lang/Object");
+	}
+
+	/**
+	 * @return Whether or not the class read by the ClassReader implements the specified interface.
+	 */
+	public static boolean doesClassImplement(ClassReader classReader, String targetInterfaceInternalClassName)
+	{
+		List<String> immediateInterfaces = Arrays.asList(classReader.getInterfaces());
+		for (String immediateInterface : immediateInterfaces)
+		{
+			if (ObfHelper.getInternalClassName(immediateInterface).equals(targetInterfaceInternalClassName))
+				return true;
+		}
+
+		try
+		{
+			if (classHasSuper(classReader))
+				return doesClassImplement(getClassReaderForClassName(ObfHelper.getInternalClassName(classReader.getSuperName())), targetInterfaceInternalClassName);
+		}
+		catch (IOException e)
+		{
+			throw new RuntimeException("raw = " + classReader.getSuperName() + ", obf = " + ObfHelper.getInternalClassName(classReader.getSuperName()), e);
+		}
+		return false;
+	}
+
+	/**
+	 * @return Whether or not the class read by the ClassReader extends the specified class.
+	 */
+	public static boolean doesClassExtend(ClassReader classReader, String targetSuperInternalClassName)
+	{
+		if (!classHasSuper(classReader))
+			return false;
+
+		String immediateSuperName = ObfHelper.getInternalClassName(classReader.getSuperName());
+		if (immediateSuperName.equals(targetSuperInternalClassName))
+			return true;
+
+		try
+		{
+			return doesClassExtend(getClassReaderForClassName(immediateSuperName), targetSuperInternalClassName);
+		}
+		catch (IOException e)
+		{
+			throw new RuntimeException("raw = " + classReader.getSuperName() + ", obf = " + immediateSuperName, e);
+		}
+	}
+
+	/**
 	 * @return Whether or not the instruction is a label or a line number.
 	 */
 	public static boolean isLabelOrLineNumber(AbstractInsnNode insn)
@@ -101,8 +192,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link AbstractInsnNode#getType()} == {@link type} (could be {@link firstInsnToCheck}). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link AbstractInsnNode#getType()} == {@code type} (could be {@code firstInsnToCheck}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindInstructionOfType(AbstractInsnNode firstInsnToCheck, int type)
 	{
@@ -110,9 +201,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link AbstractInsnNode#getType()} == {@link type} (could be {@link firstInsnToCheck}). 
-	 * If {@link reverseDirection} is {@link true}, instructions will be traversed backwards (using getPrevious()).
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link AbstractInsnNode#getType()} == {@code type} (could be {@code firstInsnToCheck}). 
+	 * If {@code reverseDirection} is {@code true}, instructions will be traversed backwards (using getPrevious()).
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindInstructionOfType(AbstractInsnNode firstInsnToCheck, int type, boolean reverseDirection)
 	{
@@ -125,8 +216,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link AbstractInsnNode#getOpcode()} == {@link opcode} (could be {@link firstInsnToCheck}). 
-	 * If a matching instruction cannot be found, returns {@link null}
+	 * @return The first instruction for which {@link AbstractInsnNode#getOpcode()} == {@code opcode} (could be {@code firstInsnToCheck}). 
+	 * If a matching instruction cannot be found, returns {@code null}
 	 */
 	public static AbstractInsnNode getOrFindInstructionWithOpcode(AbstractInsnNode firstInsnToCheck, int opcode)
 	{
@@ -134,9 +225,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link AbstractInsnNode#getOpcode()} == {@link opcode} (could be {@link firstInsnToCheck}). 
-	 * If {@link reverseDirection} is {@link true}, instructions will be traversed backwards (using getPrevious()).
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link AbstractInsnNode#getOpcode()} == {@code opcode} (could be {@code firstInsnToCheck}). 
+	 * If {@code reverseDirection} is {@code true}, instructions will be traversed backwards (using getPrevious()).
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindInstructionWithOpcode(AbstractInsnNode firstInsnToCheck, int opcode, boolean reverseDirection)
 	{
@@ -149,9 +240,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@link true} (could be {@link firstInsnToCheck}). 
-	 * If {@link reverseDirection} is {@link true}, instructions will be traversed backwards (using getPrevious()).
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@code true} (could be {@code firstInsnToCheck}). 
+	 * If {@code reverseDirection} is {@code true}, instructions will be traversed backwards (using getPrevious()).
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindLabelOrLineNumber(AbstractInsnNode firstInsnToCheck)
 	{
@@ -159,8 +250,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@link true} (could be {@link firstInsnToCheck}). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@code true} (could be {@code firstInsnToCheck}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindLabelOrLineNumber(AbstractInsnNode firstInsnToCheck, boolean reverseDirection)
 	{
@@ -173,8 +264,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@link false} (could be {@link firstInsnToCheck}). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@code false} (could be {@code firstInsnToCheck}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindInstruction(AbstractInsnNode firstInsnToCheck)
 	{
@@ -182,9 +273,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@link false} (could be {@link firstInsnToCheck}). 
-	 * If {@link reverseDirection} is {@link true}, instructions will be traversed backwards (using getPrevious()).
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction for which {@link #isLabelOrLineNumber} == {@code false} (could be {@code firstInsnToCheck}). 
+	 * If {@code reverseDirection} is {@code true}, instructions will be traversed backwards (using getPrevious()).
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode getOrFindInstruction(AbstractInsnNode firstInsnToCheck, boolean reverseDirection)
 	{
@@ -197,8 +288,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction of the {@link method} for which {@link #isLabelOrLineNumber} == {@link false}. 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction of the {@code method} for which {@link #isLabelOrLineNumber} == {@code false}. 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findFirstInstruction(MethodNode method)
 	{
@@ -206,8 +297,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The first instruction of the {@link method} for which {@link AbstractInsnNode#getOpcode()} == {@link opcode}. 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The first instruction of the {@code method} for which {@link AbstractInsnNode#getOpcode()} == {@code opcode}. 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findFirstInstructionWithOpcode(MethodNode method, int opcode)
 	{
@@ -215,8 +306,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The last instruction of the {@link method} for which {@link AbstractInsnNode#getOpcode()} == {@link opcode}. 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The last instruction of the {@code method} for which {@link AbstractInsnNode#getOpcode()} == {@code opcode}. 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findLastInstructionWithOpcode(MethodNode method, int opcode)
 	{
@@ -224,9 +315,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The next instruction after {@link instruction} for which {@link #isLabelOrLineNumber} == {@link false} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The next instruction after {@code instruction} for which {@link #isLabelOrLineNumber} == {@code false} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findNextInstruction(AbstractInsnNode instruction)
 	{
@@ -234,9 +325,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The next instruction after {@link instruction} for which {@link AbstractInsnNode#getOpcode()} == {@link opcode} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The next instruction after {@code instruction} for which {@link AbstractInsnNode#getOpcode()} == {@code opcode} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findNextInstructionWithOpcode(AbstractInsnNode instruction, int opcode)
 	{
@@ -244,9 +335,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The next instruction after {@link instruction} for which {@link #isLabelOrLineNumber} == {@link true} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The next instruction after {@code instruction} for which {@link #isLabelOrLineNumber} == {@code true} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findNextLabelOrLineNumber(AbstractInsnNode instruction)
 	{
@@ -254,9 +345,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The previous instruction before {@link instruction} for which {@link #isLabelOrLineNumber} == {@link false} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The previous instruction before {@code instruction} for which {@link #isLabelOrLineNumber} == {@code false} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findPreviousInstruction(AbstractInsnNode instruction)
 	{
@@ -264,9 +355,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The previous instruction before {@link instruction} for which {@link AbstractInsnNode#getOpcode()} == {@link opcode} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The previous instruction before {@code instruction} for which {@link AbstractInsnNode#getOpcode()} == {@code opcode} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findPreviousInstructionWithOpcode(AbstractInsnNode instruction, int opcode)
 	{
@@ -274,9 +365,9 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The previous instruction before {@link instruction} for which {@link #isLabelOrLineNumber} == {@link true} 
-	 * (excluding {@link instruction). 
-	 * If a matching instruction cannot be found, returns {@link null}.
+	 * @return The previous instruction before {@code instruction} for which {@link #isLabelOrLineNumber} == {@code true} 
+	 * (excluding {@code instruction}). 
+	 * If a matching instruction cannot be found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findPreviousLabelOrLineNumber(AbstractInsnNode instruction)
 	{
@@ -284,8 +375,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The method of the class that has both a matching {@link methodName} and {@link methodDesc}.
-	 * If no matching method is found, returns {@link null}.
+	 * @return The method of the class that has both a matching {@code methodName} and {@code methodDesc}.
+	 * If no matching method is found, returns {@code null}.
 	 */
 	public static MethodNode findMethodNodeOfClass(ClassNode classNode, String methodName, String methodDesc)
 	{
@@ -315,7 +406,7 @@ public class ASMHelper
 	 * Useful for defining the end label for ASM-inserted local variables.
 	 * 
 	 * @return The last label of the method (usually after the RETURN instruction).
-	 * If no matching {@link LabelNode} is found, returns {@link null}.
+	 * If no matching {@link LabelNode} is found, returns {@code null}.
 	 */
 	public static LabelNode findEndLabel(MethodNode method)
 	{
@@ -328,8 +419,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * Remove instructions from {@link insnList} starting with {@link startInvlusive} 
-	 * up until reaching {@link endNotInclusive} ({@link endNotInclusive} will not be removed).
+	 * Remove instructions from {@code insnList} starting with {@code startInclusive} 
+	 * up until reaching {@code endNotInclusive} ({@code endNotInclusive} will not be removed).
 	 * 
 	 * @return The number of instructions removed
 	 */
@@ -347,8 +438,26 @@ public class ASMHelper
 	}
 
 	/**
+	 * Note: This is an alternative to {@link #removeFromInsnListUntil(InsnList, AbstractInsnNode, AbstractInsnNode) removeFromInsnListUntil} and will achieve a similar result. <br>
+	 * <br>
+	 * 
+	 * Skip instructions from {@code insnList} starting with {@code startInclusive}
+	 * up until reaching {@code endNotInclusive} ({@code endNotInclusive} will not be skipped).
+	 *
+	 * This is achieved by inserting a GOTO instruction before {@code startInclusive} which is branched to a
+	 * LabelNode that is inserted before {@code endNotInclusive}.
+	 */
+	public static void skipInstructions(InsnList insnList, AbstractInsnNode startInclusive, AbstractInsnNode endNotInclusive)
+    	{
+        	LabelNode skipLabel = new LabelNode();
+        	JumpInsnNode gotoInsn = new JumpInsnNode(Opcodes.GOTO, skipLabel);
+        	insnList.insertBefore(startInclusive, gotoInsn);
+        	insnList.insertBefore(endNotInclusive, skipLabel);
+    	}
+
+	/**
 	 * Note: Does not move the instruction, but rather gets the instruction a certain
-	 * distance away from {@link start}.<br>
+	 * distance away from {@code start}.<br>
 	 * <br>
 	 * 
 	 * <b>Example:</b>
@@ -362,7 +471,7 @@ public class ASMHelper
 	 * 
 	 * @param start The instruction to move from
 	 * @param distance The distance to move (can be positive or negative)
-	 * @return The instruction {@link distance} away from the {@link start} instruction
+	 * @return The instruction {@code distance} away from the {@code start} instruction
 	 */
 	public static AbstractInsnNode move(final AbstractInsnNode start, int distance)
 	{
@@ -383,7 +492,7 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return Whether or not the pattern in {@link checkFor} matches starting at {@link checkAgainst}
+	 * @return Whether or not the pattern in {@code checkFor} matches starting at {@code checkAgainst}
 	 */
 	public static boolean patternMatches(InsnList checkFor, AbstractInsnNode checkAgainst)
 	{
@@ -391,12 +500,12 @@ public class ASMHelper
 	}
 
 	/**
-	 * Checks whether or not the pattern in {@link checkFor} matches, starting at {@link checkAgainst}.
+	 * Checks whether or not the pattern in {@code checkFor} matches, starting at {@code checkAgainst}.
 	 * 
-	 * @return All of the instructions that were matched by the {@link checkFor} pattern.
+	 * @return All of the instructions that were matched by the {@code checkFor} pattern.
 	 * If the pattern was not found, returns an empty {@link InsnList}.<br>
 	 * <br>
-	 * Note: If the pattern was matched, the size of the returned {@link InsnList} will be >= {@link checkFor}.size().
+	 * Note: If the pattern was matched, the size of the returned {@link InsnList} will be >= {@code checkFor}.size().
 	 */
 	public static InsnList checkForPatternAt(InsnList checkFor, AbstractInsnNode checkAgainst)
 	{
@@ -433,12 +542,12 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for the pattern in {@link needle}, starting at {@link haystackStart}.
+	 * Searches for the pattern in {@code needle}, starting at {@code haystackStart}.
 	 * 
 	 * @return All of the instructions that were matched by the pattern.
 	 * If the pattern was not found, returns an empty {@link InsnList}.<br>
 	 * <br>
-	 * Note: If the pattern was matched, the size of the returned {@link InsnList} will be >= {@link checkFor}.size().
+	 * Note: If the pattern was matched, the size of the returned {@link InsnList} will be >= {@code checkFor}.size().
 	 */
 	public static InsnList findAndGetFoundInsnList(AbstractInsnNode haystackStart, InsnList needle)
 	{
@@ -457,7 +566,7 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for the pattern in {@link needle} within {@link haystack}.
+	 * Searches for the pattern in {@code needle} within {@code haystack}.
 	 * 
 	 * @return The first instruction of the matched pattern.
 	 * If the pattern was not found, returns an empty {@link InsnList}.
@@ -468,10 +577,10 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for the pattern in {@link needle}, starting at {@link haystackStart}.
+	 * Searches for the pattern in {@code needle}, starting at {@code haystackStart}.
 	 * 
 	 * @return The first instruction of the matched pattern.
-	 * If the pattern was not found, returns @{link null}.
+	 * If the pattern was not found, returns {@code null}.
 	 */
 	public static AbstractInsnNode find(AbstractInsnNode haystackStart, InsnList needle)
 	{
@@ -483,10 +592,10 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for an instruction matching {@link needle} within {@link haystack}.
+	 * Searches for an instruction matching {@code needle} within {@code haystack}.
 	 * 
 	 * @return The matching instruction.
-	 * If a matching instruction was not found, returns @{link null}.
+	 * If a matching instruction was not found, returns {@code null}.
 	 */
 	public static AbstractInsnNode find(InsnList haystack, AbstractInsnNode needle)
 	{
@@ -494,10 +603,10 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for an instruction matching {@link needle}, starting at {@link haystackStart}.
+	 * Searches for an instruction matching {@code needle}, starting at {@code haystackStart}.
 	 * 
 	 * @return The matching instruction.
-	 * If a matching instruction was not found, returns @{link null}.
+	 * If a matching instruction was not found, returns {@code null}.
 	 */
 	public static AbstractInsnNode find(AbstractInsnNode haystackStart, AbstractInsnNode needle)
 	{
@@ -507,10 +616,10 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for the pattern in {@link needle} within {@link haystack} and replaces it with {@link replacement}.
+	 * Searches for the pattern in {@code needle} within {@code haystack} and replaces it with {@code replacement}.
 	 * 
 	 * @return The instruction after the replacement.
-	 * If the pattern was not found, returns @{link null}.
+	 * If the pattern was not found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findAndReplace(InsnList haystack, InsnList needle, InsnList replacement)
 	{
@@ -518,11 +627,11 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for the pattern in {@link needle} within {@link haystack} (starting at {@link haystackStart})
-	 * and replaces it with {@link replacement}.
+	 * Searches for the pattern in {@code needle} within {@code haystack} (starting at {@code haystackStart})
+	 * and replaces it with {@code replacement}.
 	 * 
 	 * @return The instruction after the replacement.
-	 * If the pattern was not found, returns @{link null}.
+	 * If the pattern was not found, returns {@code null}.
 	 */
 	public static AbstractInsnNode findAndReplace(InsnList haystack, InsnList needle, InsnList replacement, AbstractInsnNode haystackStart)
 	{
@@ -538,8 +647,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for all instances of the pattern in {@link needle} within {@link haystack} 
-	 * and replaces them with {@link replacement}.
+	 * Searches for all instances of the pattern in {@code needle} within {@code haystack} 
+	 * and replaces them with {@code replacement}.
 	 * 
 	 * @return The number of replacements made.
 	 */
@@ -549,8 +658,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * Searches for all instances of the pattern in {@link needle} within {@link haystack} 
-	 * (starting at {@link haystackStart}) and replaces them with {@link replacement}.
+	 * Searches for all instances of the pattern in {@code needle} within {@code haystack} 
+	 * (starting at {@code haystackStart}) and replaces them with {@code replacement}.
 	 * 
 	 * @return The number of replacements made.
 	 */
@@ -567,7 +676,7 @@ public class ASMHelper
 	/**
 	 * Clones an instruction list, remapping labels in the process.
 	 * 
-	 * @return The cloned {@link InsnList}
+	 * @return The cloned {@code InsnList}
 	 */
 	public static InsnList cloneInsnList(InsnList source)
 	{
@@ -594,8 +703,8 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return The local variable of the method that has both a matching {@link varName} and {@link varDesc}.
-	 * If no matching local variable is found, returns {@link null}.
+	 * @return The local variable of the method that has both a matching {@code varName} and {@code varDesc}.
+	 * If no matching local variable is found, returns {@code null}.
 	 */
 	public static LocalVariableNode findLocalVariableOfMethod(MethodNode method, String varName, String varDesc)
 	{
@@ -613,7 +722,7 @@ public class ASMHelper
 	private static TraceMethodVisitor methodprinter = new TraceMethodVisitor(printer);
 
 	/**
-	 * @return {@link insnList} as a string.<br>
+	 * @return {@code insnList} as a string.<br>
 	 * <br>
 	 * <b>Example output:</b><br>
 	 * <pre>
@@ -633,7 +742,7 @@ public class ASMHelper
 	}
 
 	/**
-	 * @return {@link method} as a string.
+	 * @return {@code method} as a string.
 	 */
 	public static String getMethodAsString(MethodNode method)
 	{

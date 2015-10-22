@@ -1,7 +1,6 @@
 package squeek.asmhelper;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.launchwrapper.LaunchClassLoader;
@@ -10,8 +9,6 @@ import cpw.mods.fml.common.asm.transformers.deobf.FMLDeobfuscatingRemapper;
 public class ObfHelper
 {
 	private static Boolean obfuscated = null;
-	private static HashMap<String, String> classNameToObfClassNameCache = new HashMap<String, String>();
-	private static HashMap<String, String> obfClassNameToClassNameCache = new HashMap<String, String>();
 
 	/**
 	 * Can be initialized by a core mod in {@link cpw.mods.fml.relauncher.IFMLLoadingPlugin#injectData} by 
@@ -45,16 +42,10 @@ public class ObfHelper
 			}
 			catch (IOException e)
 			{
-				e.printStackTrace();
+				obfuscated = true;
 			}
 		}
 		return obfuscated;
-	}
-
-	private static void cacheObfClassMapping(String obfClassName, String className)
-	{
-		obfClassNameToClassNameCache.put(obfClassName, className);
-		classNameToObfClassNameCache.put(className, obfClassName);
 	}
 
 	/**
@@ -73,16 +64,7 @@ public class ObfHelper
 	 */
 	public static String forceToDeobfClassName(String obfClassName)
 	{
-		if (!obfClassNameToClassNameCache.containsKey(obfClassName))
-		{
-			String mapped = FMLDeobfuscatingRemapper.INSTANCE.map(obfClassName.replace('.', '/')).replace('/', '.');
-			if (!mapped.equals(obfClassName))
-				cacheObfClassMapping(mapped, obfClassName);
-			else
-				return obfClassName;
-		}
-
-		return obfClassNameToClassNameCache.get(obfClassName);
+		return FMLDeobfuscatingRemapper.INSTANCE.map(obfClassName.replace('.', '/')).replace('/', '.');
 	}
 
 	/**
@@ -101,16 +83,7 @@ public class ObfHelper
 	 */
 	public static String forceToObfClassName(String deobfClassName)
 	{
-		if (!classNameToObfClassNameCache.containsKey(deobfClassName))
-		{
-			String unmapped = FMLDeobfuscatingRemapper.INSTANCE.unmap(deobfClassName.replace('.', '/')).replace('/', '.');
-			if (!unmapped.equals(deobfClassName))
-				cacheObfClassMapping(unmapped, deobfClassName);
-			else
-				return deobfClassName;
-		}
-
-		return classNameToObfClassNameCache.get(deobfClassName);
+		return FMLDeobfuscatingRemapper.INSTANCE.unmap(deobfClassName.replace('.', '/')).replace('/', '.');
 	}
 
 	/**
